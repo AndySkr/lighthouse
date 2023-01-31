@@ -611,6 +611,90 @@ describe('network recorder', function() {
     expect(initiated.initiatorRequest).toBe(initiator1);
   });
 
+  it('should look in async stack traces for initiators', () => {
+    const devtoolsLogs = networkRecordsToDevtoolsLog([
+      {
+        url: 'https://example.com/',
+        startTime: 10_000,
+      }, {
+        url: 'https://example.com/script.js',
+        startTime: 20_000,
+        initiator: {
+          type: 'parser',
+          url: 'https://example.com/',
+        },
+      },
+      {
+        url: 'https://example.com/img.png',
+        startTime: 30_000,
+        initiator: {
+          type: 'script',
+          stack: {
+            // Only async callFrames entries.
+            callFrames: [],
+            parent: {
+              description: 'Image',
+              callFrames: [{
+                functionName: 'apply',
+                scriptId: '23',
+                url: 'https://example.com/script.js',
+                lineNumber: 165,
+                columnNumber: 416,
+              }, {
+                functionName: 'Cu',
+                scriptId: '78',
+                url: 'https://example.com/',
+                lineNumber: 0,
+                columnNumber: 91074,
+              }],
+            },
+          },
+        },
+      },
+    ]);
+
+    const records = NetworkRecorder.recordsFromLogs(devtoolsLogs);
+    expect(records).toHaveLength(3);
+
+    const [mainRequest, scriptRequest, imageRequest] = records;
+    expect(mainRequest.initiatorRequest).toBe(undefined);
+    expect(scriptRequest.initiatorRequest).toBe(mainRequest);
+    expect(imageRequest.initiatorRequest).toBe(scriptRequest);
+  });
+
+  it('should follow a successful preload for the initiator path', () => {
+    const devtoolsLogs = networkRecordsToDevtoolsLog([
+      {
+        url: 'https://example.com/',
+        startTime: 10_000,
+      }, {
+        url: 'https://example.com/script.js',
+        startTime: 20_000,
+        isLinkPreload: true,
+        initiator: {type: 'parser', url: 'https://example.com/'},
+      }, {
+        url: 'https://example.com/script.js',
+        startTime: 30_000,
+        fromDiskCache: true,
+        initiator: {type: 'parser', url: 'https://example.com/'},
+      },
+      {
+        url: 'https://example.com/img.png',
+        startTime: 40_000,
+        initiator: {type: 'script', url: 'https://example.com/script.js'},
+      },
+    ]);
+
+    const records = NetworkRecorder.recordsFromLogs(devtoolsLogs);
+    expect(records).toHaveLength(4);
+
+    const [mainRequest, preloadRequest, scriptRequest, imageRequest] = records;
+    expect(mainRequest.initiatorRequest).toBe(undefined);
+    expect(preloadRequest.initiatorRequest).toBe(mainRequest);
+    expect(scriptRequest.initiatorRequest).toBe(mainRequest);
+    expect(imageRequest.initiatorRequest).toBe(preloadRequest);
+  });
+
   it('should not set initiator when ambiguous', () => {
     const logs = [
       { // initiator A

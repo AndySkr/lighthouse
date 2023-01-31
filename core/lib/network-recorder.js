@@ -9,6 +9,7 @@ import {EventEmitter} from 'events';
 import log from 'lighthouse-logger';
 
 import {NetworkRequest} from './network-request.js';
+import {PageDependencyGraph} from '../computed/page-dependency-graph.js';
 
 /**
  * @typedef {{
@@ -243,9 +244,8 @@ class NetworkRecorder extends RequestEventEmitter {
     if (record.redirectSource) {
       return record.redirectSource;
     }
-    const stackFrames = record.initiator.stack?.callFrames || [];
-    const initiatorURL = record.initiator.url || stackFrames[0]?.url;
 
+    const initiatorURL = PageDependencyGraph.getNetworkInitiators(record)[0];
     let candidates = recordsByURL.get(initiatorURL) || [];
     // The initiator must come before the initiated request.
     candidates = candidates.filter(cand => cand.responseReceivedTime <= record.startTime);
@@ -271,6 +271,18 @@ class NetworkRecorder extends RequestEventEmitter {
         cand.resourceType === NetworkRequest.TYPES.Document);
       if (documentCandidates.length) {
         candidates = documentCandidates;
+      }
+    }
+    if (candidates.length > 1) {
+      // If all real loads came from successful preloads (url preloaded and
+      // loads came from the cache), filter to link rel=preload request(s).
+      const linkPreloadCandidates = candidates.filter(c => c.isLinkPreload);
+      if (linkPreloadCandidates.length) {
+        const nonPreloadCandidates = candidates.filter(c => !c.isLinkPreload);
+        const allPreloaded = nonPreloadCandidates.every(c => c.fromDiskCache || c.fromMemoryCache);
+        if (nonPreloadCandidates.length && allPreloaded) {
+          candidates = linkPreloadCandidates;
+        }
       }
     }
 
